@@ -1,0 +1,171 @@
+package com.yourteam.dataprocessing
+
+enum class RiskColor { GREEN, YELLOW, ORANGE, RED }
+
+/** Incoming data */
+data class HrReading(
+    val epochMillis: Long,
+    val bpm: Int
+)
+
+/** Always send this to the UI */
+data class UiOutput(
+    val epochMillis: Long,
+    val bpm: Int,
+    val baselineBpm: Double?,          // null until enough baseline history
+    val pctIncrease: Double?,          // decimal: 0.20 = 20% (null until baseline exists)
+    val pctIncreasePercent: Double?,   // 20.0 = 20% (null until baseline exists)
+
+    // UI-friendly fields (no null handling needed in UI)
+    val pctIncreaseDisplay: String,    // "--" if not available, else "23.4%"
+    val baselineDisplay: String,       // "--" if not available, else "78.5"
+
+    val risk: RiskColor
+)
+
+/** Only send this to ML when risk != GREEN */
+data class MlEvent(
+    val epochMillis: Long,
+    val bpm: Int,
+    val baselineBpm: Double,
+    val pctIncrease: Double,           // decimal (0.20 = 20%)
+    val pctIncreasePercent: Double,    // 20.0 = 20%
+    val risk: RiskColor,
+    val severeRunMinutes: Double
+)
+
+/** One return object from one function call */
+data class EngineOutput(
+    val ui: UiOutput,
+    val mlEvent: MlEvent?              // null unless YELLOW/ORANGE/RED and baseline exists
+)
+
+/**
+ * Risk rules:
+ * - Green: < 20% increase
+ * - Yellow: >= 20%
+ * - Orange: >= 35%
+ * - Red: >= 50% held for >= 5 minutes
+ */
+data class RiskConfig(
+    val lowThreshold: Double = 0.20,        // Yellow >= 20%
+    val moderateThreshold: Double = 0.35,   // Orange >= 35%
+    val severeThreshold: Double = 0.50,     // Red condition starts here...
+    val severeHoldMinutes: Double = 5.0,    // ...but must be held for 5+ minutes
+    val baselineWindowMinutes: Int = 5,     // rolling baseline window
+    val maxGapMinutes: Int = 15,            // gap reset threshold
+    val minBpm: Int = 20,                   // basic sanity filter
+    val maxBpm: Int = 240                   // basic sanity filter
+)
+
+class HeartRateEngine(private val cfg: RiskConfig = RiskConfig()) {
+
+    private val minuteMillis = 60_000L
+
+    // state for real-time streaming
+    private val window = ArrayDeque<HrReading>()
+    private var last: HrReading? = null
+    private var severeRunMinutes: Double = 0.0
+    private var prevWasSevere: Boolean = false
+
+    fun update(reading: HrReading): EngineOutput {
+        // 0) Basic sanity filter
+        val r =
+            if (reading.bpm in cfg.minBpm..cfg.maxBpm) reading
+            else reading.copy(bpm = reading.bpm.coerceIn(cfg.minBpm, cfg.maxBpm))
+
+        // 1) Minutes since previous reading
+        val prev = last
+        val deltaMin = if (prev == null) 0.0 else {
+            val d = (r.epochMillis - prev.epochMillis).toDouble() / minuteMillis
+            if (d.isFinite() && d >= 0) d else 0.0
+        }
+
+        // 2) If there was a big gap, do NOT count missing time toward "held"
+        val gapOk = (prev == null) || (deltaMin <= cfg.maxGapMinutes)
+
+        // 3) Rolling baseline
+        pruneWindow(window, r.epochMillis)
+        val baseline = if (window.isNotEmpty()) median(window.map { it.bpm }.sorted()) else null
+
+        // 4) Percent increase vs baseline
+        val pctIncrease = baseline?.let { b ->
+            if (b <= 0.0) null else (r.bpm - b) / b
+        }
+        val pctIncreasePercent = pctIncrease?.times(100.0)
+
+        // 5) Severe hold tracking (robust to gaps)
+        val isSevereNow = (pctIncrease != null && pctIncrease >= cfg.severeThreshold)
+        severeRunMinutes =
+            if (isSevereNow && prevWasSevere && gapOk) severeRunMinutes + deltaMin
+            else 0.0
+        prevWasSevere = isSevereNow
+
+        // 6) Risk classification
+        val risk = classifyRisk(pctIncrease, severeRunMinutes)
+
+        // 7) Update state AFTER labeling
+        window.addLast(r)
+        last = r
+
+        // 8) UI-friendly display strings
+        val pctIncreaseDisplay = if (pctIncreasePercent == null) "--" else "${format1(pctIncreasePercent)}%"
+        val baselineDisplay = if (baseline == null) "--" else format1(baseline)
+
+        // 9) UI output (always)
+        val ui = UiOutput(
+            epochMillis = r.epochMillis,
+            bpm = r.bpm,
+            baselineBpm = baseline,
+            pctIncrease = pctIncrease,
+            pctIncreasePercent = pctIncreasePercent,
+            pctIncreaseDisplay = pctIncreaseDisplay,
+            baselineDisplay = baselineDisplay,
+            risk = risk
+        )
+
+        // 10) ML event (only when not green AND baseline exists)
+        val mlEvent =
+            if (risk != RiskColor.GREEN && baseline != null && pctIncrease != null && pctIncreasePercent != null) {
+                MlEvent(
+                    epochMillis = r.epochMillis,
+                    bpm = r.bpm,
+                    baselineBpm = baseline,
+                    pctIncrease = pctIncrease,
+                    pctIncreasePercent = pctIncreasePercent,
+                    risk = risk,
+                    severeRunMinutes = severeRunMinutes
+                )
+            } else null
+
+        return EngineOutput(ui = ui, mlEvent = mlEvent)
+    }
+
+    // --- helpers ---
+
+    private fun classifyRisk(pctIncrease: Double?, severeRunMinutes: Double): RiskColor {
+        if (pctIncrease == null) return RiskColor.GREEN
+        return when {
+            (pctIncrease >= cfg.severeThreshold && severeRunMinutes >= cfg.severeHoldMinutes) -> RiskColor.RED
+            (pctIncrease >= cfg.moderateThreshold) -> RiskColor.ORANGE
+            (pctIncrease >= cfg.lowThreshold) -> RiskColor.YELLOW
+            else -> RiskColor.GREEN
+        }
+    }
+
+    private fun pruneWindow(window: ArrayDeque<HrReading>, nowMillis: Long) {
+        val cutoff = nowMillis - cfg.baselineWindowMinutes * minuteMillis
+        while (window.isNotEmpty() && window.first().epochMillis < cutoff) {
+            window.removeFirst()
+        }
+    }
+
+    private fun median(sortedInts: List<Int>): Double {
+        val n = sortedInts.size
+        return if (n == 0) Double.NaN
+        else if (n % 2 == 1) sortedInts[n / 2].toDouble()
+        else (sortedInts[n / 2 - 1] + sortedInts[n / 2]).toDouble() / 2.0
+    }
+
+    private fun format1(x: Double): String = String.format("%.1f", x)
+}
