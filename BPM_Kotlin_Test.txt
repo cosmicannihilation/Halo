@@ -1,0 +1,72 @@
+package com.yourteam.dataprocessing
+
+import org.junit.Test
+import java.time.LocalDateTime
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+
+class ExampleUnitTest {
+
+    // Matches: "2025-11-14 18:16:52"
+    private val fmt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+
+    // Use your local timezone for these timestamps (change if needed)
+    private val zone = ZoneId.systemDefault()
+
+    private fun toEpochMillis(ts: String): Long {
+        val ldt = LocalDateTime.parse(ts.trim(), fmt)
+        return ldt.atZone(zone).toInstant().toEpochMilli()
+    }
+
+    @Test
+    fun runEngineWithMyInputs() {
+        val engine = HeartRateEngine()
+
+        val raw = listOf(
+            "2025-11-14 18:16:52" to 79,
+            "2025-11-14 18:16:57" to 78,
+            "2025-11-14 18:17:02" to 73,
+            "2025-11-14 18:17:07" to 75,
+            "2025-11-14 18:17:08" to 75,
+            "2025-11-14 18:17:13" to 74,
+            "2025-11-14 18:17:22" to 79,
+            "2025-11-14 18:18:14" to 75,
+            "2025-11-14 18:19:36" to 80,
+            "2025-11-14 18:20:09" to 109,
+            "2025-11-14 18:20:14" to 106,
+            "2025-11-14 18:20:15" to 104,
+            "2025-11-14 18:20:22" to 101,
+            "2025-11-14 18:20:25" to 103,
+            "2025-11-14 18:20:32" to 109,
+            "2025-11-14 18:20:35" to 112,
+            "2025-11-14 18:20:44" to 117,
+            "2025-11-14 18:20:45" to 116,
+            "2025-11-14 18:20:50" to 114,
+            "2025-11-14 18:20:58" to 114,
+            "2025-11-14 18:21:04" to 117,
+            "2025-11-14 18:21:08" to 120,
+            "2025-11-14 18:21:14" to 122,
+            "2025-11-14 18:21:17" to 123,
+            "2025-11-14 18:21:24" to 122,
+            "2025-11-14 18:21:27" to 123,
+            "2025-11-14 18:21:32" to 125,
+            "2025-11-14 18:21:35" to 126,
+            "2025-11-14 18:21:43" to 127,
+            "2025-11-14 18:21:49" to 128
+        )
+
+        val inputs = raw.map { (ts, bpm) ->
+            HrReading(epochMillis = toEpochMillis(ts), bpm = bpm)
+        }
+
+        for ((i, r) in inputs.withIndex()) {
+            val out = engine.update(r)
+
+            println(
+                "${i + 1}. ts=${raw[i].first} bpm=${out.ui.bpm} " +
+                        "baseline=${out.ui.baselineDisplay} pct=${out.ui.pctIncreaseDisplay} " +
+                        "risk=${out.ui.risk} mlEvent=${out.mlEvent != null}"
+            )
+        }
+    }
+}
