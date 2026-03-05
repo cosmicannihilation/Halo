@@ -287,7 +287,7 @@ fun MLTestScreen() {
     // Run ML model using live HR
     val result = HemorrhageRiskModel.predict(
         FeatureVector(
-            heartRate.toDouble()
+            heartRate.toDouble(),
             36.8, // temporary simulated temperature
             98.0,
             50.0
@@ -318,4 +318,3 @@ fun MLTestScreen() {
         Text("Probability = ${result.probability}")
     }
 }
-
