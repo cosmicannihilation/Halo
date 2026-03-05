@@ -19,6 +19,7 @@ byte rateSpot = 0;
 long lastBeat = 0; // Time at which the last beat occurred
 float beatsPerMinute;
 int beatAvg; // The final smoothed Heart Rate we will send to the phone
+byte beatsDetected = 0; // Tracks how many beats have happened since finger was placed
 
 void setup() {
   Serial.begin(115200);
@@ -73,21 +74,40 @@ void loop() {
 
       beatsPerMinute = 60 / (delta / 1000.0); // Calculating the raw Beats Per Minute.
 
-      if (beatsPerMinute < 255 && beatsPerMinute > 20) { // Accepting normal heart rates to filter out bad data/glitches. 
-        rates[rateSpot++] = (byte)beatsPerMinute; // Stores reading in array to be smooth.
-        rateSpot %= RATE_SIZE; // Wrap around if we hit the limit
+      beatsDetected++; // Increment the beat counter
 
-        // Take average of the last few readings
-        beatAvg = 0;
-        for (byte x = 0 ; x < RATE_SIZE ; x++) {
-          beatAvg += rates[x];
+      // Ignore the first 2 physical peaks. Pressing your finger down squishes blood and causes false, slow beats!
+      if (beatsDetected > 2) {
+        if (beatsPerMinute < 255 && beatsPerMinute > 30) { // Accepting normal heart rates to filter out bad data/glitches. 
+          rates[rateSpot++] = (byte)beatsPerMinute; // Stores reading in array to be smooth.
+          rateSpot %= RATE_SIZE; // Wrap around if we hit the limit
+
+          // Take average of ONLY the valid readings
+          beatAvg = 0;
+          byte validBeats = 0;
+          for (byte x = 0 ; x < RATE_SIZE ; x++) {
+            if (rates[x] != 0) { // Only count slots that actually have data
+              beatAvg += rates[x];
+              validBeats++;
+            }
+          }
+          if (validBeats > 0) {
+            beatAvg /= validBeats; // Divide by the number of valid beats, not the fixed RATE_SIZE
+          }
         }
-        beatAvg /= RATE_SIZE;
       }
     }
   } 
   else {
     beatAvg = 0; // If no finger is detected, heart rate set to 0.
+    beatsDetected = 0; // Reset the beat counter when finger is removed
+    lastBeat = millis(); // Constantly reset the timer so the first beat isn't artificially long
+    
+    // Clear the array and reset the counter so the next time a finger is placed, it starts fresh immediately!
+    for (byte x = 0 ; x < RATE_SIZE ; x++) {
+      rates[x] = 0; 
+    }
+    rateSpot = 0;
   }
 
   // Handle Data Output (Every 1 Second)
@@ -98,12 +118,12 @@ void loop() {
     // READ BMP280 DATA
     float realTempF = (bmp.readTemperature() * 1.8) + 32.0; 
     
-    // CALIBRATION: Using 1048.0 to offset the San Antonio 497m reading to ~0m
-    float realAlt = bmp.readAltitude(982.4); 
+    // READ TRUE BAROMETRIC PRESSURE (in hPa). This fixes the negative numbers!
+    float realPressure = bmp.readPressure() / 100.0F; 
 
-    // FORMAT: T:72.5,P:0.2,HR:75,IR:120000
-    // Added irValue to the packet so we can debug the raw sensor data
-    String packet = "T:" + String(realTempF, 1) + ",P:" + String(realAlt, 1) + ",HR:" + String(beatAvg) + ",IR:" + String(irValue);
+    // FORMAT: T:72.5,P:1012.3,HR:75
+    // Now 'P' actually stands for true Barometric Pressure instead of Altitude
+    String packet = "T:" + String(realTempF, 1) + ",P:" + String(realPressure, 1) + ",HR:" + String(beatAvg);
     
     // 1. ALWAYS print to Serial Monitor so you can test without a phone
     Serial.println("Data: " + packet); 
