@@ -111,8 +111,22 @@ class MainActivity : ComponentActivity() {
             status: Int,
             newState: Int
         ) {
+
             if (newState == BluetoothProfile.STATE_CONNECTED) {
+                android.util.Log.d("BLE", "Connected")
                 gatt.discoverServices()
+            }
+
+            else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+
+                android.util.Log.d("BLE", "Disconnected — reconnecting")
+
+                gatt.close()
+
+                // restart scan automatically
+                runOnUiThread {
+                    startScan()
+                }
             }
         }
 
@@ -264,6 +278,9 @@ fun SimulatedSensorApp(modifier: Modifier = Modifier) {
 @Composable
 fun MLTestScreen() {
 
+
+
+
     // Live heart rate coming from BLE
     val heartRate = HeartRateHolder.bpm
 
@@ -271,8 +288,11 @@ fun MLTestScreen() {
     val result = HemorrhageRiskModel.predict(
         FeatureVector(
             heartRate.toDouble()
-            36.8 // temporary simulated temperature
-                     )
+            36.8, // temporary simulated temperature
+            98.0,
+            50.0
+
+        )
     )
 
     Column(
@@ -298,3 +318,4 @@ fun MLTestScreen() {
         Text("Probability = ${result.probability}")
     }
 }
+
