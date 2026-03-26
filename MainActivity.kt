@@ -104,6 +104,8 @@ class MainActivity : ComponentActivity() {
                 if (device.name != null && device.name.contains("XIAO") ||
                     device.address == "CE:2D:71:C2:A9:46") {
 
+                    if (bluetoothGatt != null) return
+
                     bluetoothAdapter.bluetoothLeScanner.stopScan(this)
 
                     bluetoothGatt = device.connectGatt(
@@ -136,6 +138,9 @@ class MainActivity : ComponentActivity() {
                 android.util.Log.d("BLE", "Disconnected — reconnecting")
 
                 gatt.close()
+
+                bluetoothGatt = null
+
 
                 // restart scan automatically
                 runOnUiThread {
@@ -179,12 +184,14 @@ class MainActivity : ComponentActivity() {
 
             dataBuffer += chunk
 
+            // Process only FULL lines ending with newline or complete pattern
             while (dataBuffer.contains("\n")) {
 
-                val line = dataBuffer.substringBefore("\n").trim()
-                dataBuffer = dataBuffer.substringAfter("\n")
+                val lineEnd = dataBuffer.indexOf("\n")
+                val line = dataBuffer.substring(0, lineEnd).trim()
+                dataBuffer = dataBuffer.substring(lineEnd + 1)
 
-                android.util.Log.d("XIAO_LINE", line)
+                Log.d("XIAO_LINE", line)
 
                 val parts = line.split(",")
 
@@ -202,12 +209,15 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                val tempC = (tempF - 32.0) * (5.0 / 9.0)
+                val tempC = ((tempF - 32.0) * (5.0 / 9.0)) + 10.0
+
+                Log.d("PARSED", "HR=$hr TEMP_C=$tempC")
 
                 runOnUiThread {
-                    if (hr in 50..120) {
-                        HeartRateHolder.bpm = hr
-                    }
+
+                    val safeHr = if (hr in 50..120) hr else HeartRateHolder.bpm
+
+                    HeartRateHolder.bpm = safeHr
                     SensorDataHolder.tempC = tempC
                 }
             }
