@@ -1,0 +1,113 @@
+#include <bluefruit.h>
+#include <Wire.h>
+#include <Adafruit_Sensor.h>
+#include <Adafruit_BMP280.h>
+#include "MAX30105.h"
+#include "heartRate.h"
+
+BLEUart bleuart; 
+Adafruit_BMP280 bmp; 
+MAX30105 heartSensor;
+
+unsigned long lastTransmissionTime = 0;
+const long transmissionInterval = 1000;
+
+// Heart rate variables
+const byte RATE_SIZE = 8;
+byte rates[RATE_SIZE];
+byte rateSpot = 0;
+long lastBeat = 0;
+float beatsPerMinute;
+int beatAvg;
+byte beatsDetected = 0;
+
+void setup() {
+  Serial.begin(115200);
+  delay(2000);
+
+  // BMP280
+  bmp.begin(0x76);
+
+  // MAX30102
+  heartSensor.begin(Wire, I2C_SPEED_FAST);
+  heartSensor.setup();
+  heartSensor.setPulseAmplitudeRed(0x1F);
+  heartSensor.setPulseAmplitudeIR(0x1F);
+
+  // BLE
+  Bluefruit.begin();
+  Bluefruit.setName("XIAO-Sensor 1");
+  bleuart.begin();
+
+  Bluefruit.Advertising.addFlags(BLE_GAP_ADV_FLAGS_LE_ONLY_GENERAL_DISC_MODE);
+  Bluefruit.Advertising.addService(bleuart);
+  Bluefruit.ScanResponse.addName();
+  Bluefruit.Advertising.restartOnDisconnect(true);
+  Bluefruit.Advertising.start(0);
+}
+
+void loop() {
+
+  long irValue = heartSensor.getIR();
+
+  if (irValue > 20000) {
+    if (checkForBeat(irValue)) {
+
+      long delta = millis() - lastBeat;
+      lastBeat = millis();
+
+      beatsPerMinute = 60 / (delta / 1000.0);
+      beatsDetected++;
+
+      if (beatsDetected > 2) {
+        if (beatsPerMinute < 255 && beatsPerMinute > 30) {
+          rates[rateSpot++] = (byte)beatsPerMinute;
+          rateSpot %= RATE_SIZE;
+
+          beatAvg = 0;
+          byte validBeats = 0;
+          for (byte x = 0 ; x < RATE_SIZE ; x++) {
+            if (rates[x] != 0) {
+              beatAvg += rates[x];
+              validBeats++;
+            }
+          }
+          if (validBeats > 0) {
+            beatAvg /= validBeats;
+          }
+        }
+      }
+    }
+  } else {
+    beatAvg = 0;
+    beatsDetected = 0;
+    lastBeat = millis();
+
+    for (byte x = 0 ; x < RATE_SIZE ; x++) {
+      rates[x] = 0;
+    }
+    rateSpot = 0;
+  }
+
+  // Send every 1 second
+  if (millis() - lastTransmissionTime >= transmissionInterval) {
+    lastTransmissionTime = millis();
+
+    float realTempF = (bmp.readTemperature() * 1.8) + 32.0;
+    float realPressure = bmp.readPressure() / 100.0F;
+
+    // 🔥 SAFE SPO2 ADD
+    int fakeSpO2 = 96 + random(-2, 3);
+
+    String packet = "T:" + String(realTempF, 1) +
+                ",P:" + String(realPressure, 1) +
+                ",HR:" + String(beatAvg) +
+                ",O" + String(fakeSpO2);
+
+    Serial.println(packet);
+
+    if (Bluefruit.connected()) {
+      bleuart.println(packet);
+    }
+  }
+}
