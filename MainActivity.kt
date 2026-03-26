@@ -1,5 +1,6 @@
 package com.example.testapplication
 
+import android.util.Log
 import android.os.Bundle
 import android.bluetooth.*
 import android.bluetooth.le.*
@@ -31,12 +32,22 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.random.Random
 
+val XIAO_SERVICE_UUID = UUID.fromString("6e400001-b5a3-f393-e0a9-e50e24dcca9e")
+val XIAO_TX_UUID = UUID.fromString("6e400003-b5a3-f393-e0a9-e50e24dcca9e")
+val CLIENT_CONFIG_UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
+
+
 object HeartRateHolder {
     var bpm by mutableStateOf(75)
 }
 
+object SensorDataHolder {
+    var tempC by mutableStateOf(36.8)
+}
 
 class MainActivity : ComponentActivity() {
+
+    var dataBuffer = ""
 
     private lateinit var bluetoothAdapter: BluetoothAdapter
     private var bluetoothGatt: BluetoothGatt? = null
@@ -82,13 +93,16 @@ class MainActivity : ComponentActivity() {
 
                 val device = result.device
 
+                Log.d("BLE_SCAN", "DEVICE FOUND: ${device.address}")
+
                 android.util.Log.d(
                     "BLE_SCAN",
                     "Found device: name=${device.name}, address=${device.address}"
                 )
 
-                // ✅ ONLY connect to Polar H10
-                if (device.name != null && device.name.contains("Polar H10")) {
+                // ✅ ONLY connect to XIAO
+                if (device.name != null && device.name.contains("XIAO") ||
+                    device.address == "CE:2D:71:C2:A9:46") {
 
                     bluetoothAdapter.bluetoothLeScanner.stopScan(this)
 
@@ -135,24 +149,22 @@ class MainActivity : ComponentActivity() {
             status: Int
         ) {
 
-            val service = gatt.getService(
-                UUID.fromString("0000180d-0000-1000-8000-00805f9b34fb")
-            ) ?: return
+            val service = gatt.getService(XIAO_SERVICE_UUID) ?: return
 
-            val characteristic = service.getCharacteristic(
-                UUID.fromString("00002a37-0000-1000-8000-00805f9b34fb")
-            ) ?: return
+            val characteristic = service.getCharacteristic(XIAO_TX_UUID) ?: return
 
-            // Step 1 — enable locally
             gatt.setCharacteristicNotification(characteristic, true)
 
-            // Step 2 — ENABLE NOTIFICATION ON DEVICE (CRITICAL)
-            val descriptor = characteristic.getDescriptor(
-                UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
-            )
-
+            val descriptor = characteristic.getDescriptor(CLIENT_CONFIG_UUID)
             descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
             gatt.writeDescriptor(descriptor)
+
+            // Step 1 — enable locally
+
+
+            // Step 2 — ENABLE NOTIFICATION ON DEVICE (CRITICAL)
+
+
         }
 
 
@@ -162,12 +174,44 @@ class MainActivity : ComponentActivity() {
             characteristic: BluetoothGattCharacteristic
         ) {
 
-            val hrValue = characteristic.value[1].toInt()
+            val chunk = String(characteristic.value)
+            android.util.Log.d("XIAO_RAW", chunk)
 
-            runOnUiThread {
-                HeartRateHolder.bpm = hrValue
-                android.util.Log.d("POLAR_HR", "Heart Rate = $hrValue")
+            dataBuffer += chunk
+
+            while (dataBuffer.contains("\n")) {
+
+                val line = dataBuffer.substringBefore("\n").trim()
+                dataBuffer = dataBuffer.substringAfter("\n")
+
+                android.util.Log.d("XIAO_LINE", line)
+
+                val parts = line.split(",")
+
+                var hr = 0
+                var tempF = 0.0
+
+                for (part in parts) {
+                    when {
+                        part.startsWith("HR:") -> {
+                            hr = part.removePrefix("HR:").toIntOrNull() ?: 0
+                        }
+                        part.startsWith("T:") -> {
+                            tempF = part.removePrefix("T:").toDoubleOrNull() ?: 0.0
+                        }
+                    }
+                }
+
+                val tempC = (tempF - 32.0) * (5.0 / 9.0)
+
+                runOnUiThread {
+                    if (hr in 50..120) {
+                        HeartRateHolder.bpm = hr
+                    }
+                    SensorDataHolder.tempC = tempC
+                }
             }
+
 
         }
     }
@@ -288,11 +332,12 @@ fun MLTestScreen() {
     val result = HemorrhageRiskModel.predict(
         FeatureVector(
             heartRate.toDouble(),
-            36.8, // temporary simulated temperature
+            SensorDataHolder.tempC,
             98.0,
             50.0
-
         )
+
+
     )
 
     Column(
@@ -309,9 +354,10 @@ fun MLTestScreen() {
 
         Text("Heart Rate: $heartRate BPM")
 
+        Text("Temperature: ${SensorDataHolder.tempC} °C")
+
         Spacer(modifier = Modifier.height(12.dp))
 
-        Text("z = ${result.z}")
 
         Spacer(modifier = Modifier.height(12.dp))
 
