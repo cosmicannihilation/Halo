@@ -38,6 +38,11 @@ object MotionHolder {
     var motionValue by mutableStateOf(0.0)
 }
 
+// ✅ NEW
+object PressureHolder {
+    var value by mutableStateOf(0.0)
+}
+
 class MainActivity : ComponentActivity() {
 
     var dataBuffer = ""
@@ -79,7 +84,6 @@ class MainActivity : ComponentActivity() {
 
                 val device = result.device
 
-                // 🔥 FORCE correct device (avoid name issues)
                 if (device.address == "CE:2D:71:C2:A9:46") {
 
                     if (bluetoothGatt != null) return
@@ -130,7 +134,6 @@ class MainActivity : ComponentActivity() {
                 val success = gatt.writeDescriptor(descriptor)
                 Log.d("BLE", "Descriptor write initiated: $success")
 
-                // 🔥 CRITICAL FIX (forces data flow)
                 gatt.readCharacteristic(characteristic)
 
             } else {
@@ -143,7 +146,6 @@ class MainActivity : ComponentActivity() {
             characteristic: BluetoothGattCharacteristic
         ) {
 
-            // 🔥 CONFIRM notifications
             Log.d("BLE", "Notification received")
 
             val chunk = String(characteristic.value)
@@ -163,6 +165,7 @@ class MainActivity : ComponentActivity() {
                 var tempF = 0.0
                 var spo2 = SpO2Holder.value
                 var motionString = MotionHolder.motionLabel
+                var pressureValue = PressureHolder.value   // ✅ NEW
 
                 for (part in parts) {
                     when {
@@ -179,10 +182,15 @@ class MainActivity : ComponentActivity() {
                         part.startsWith("MOTION:") -> {
                             motionString = part.removePrefix("MOTION:")
                         }
+                        // pressure
+                        part.startsWith("P:") -> {
+                            pressureValue = part.removePrefix("P:")
+                                .toDoubleOrNull() ?: PressureHolder.value
+                        }
                     }
                 }
 
-                Log.d("SENSOR_DEBUG", "HR: $hr | TempF: $tempF | SpO2: $spo2 | Motion: $motionString")
+                Log.d("SENSOR_DEBUG", "HR: $hr | TempF: $tempF | SpO2: $spo2 | Motion: $motionString | Pressure: $pressureValue")
 
                 if (spo2 < 85 || spo2 > 100) {
                     spo2 = SpO2Holder.value
@@ -209,6 +217,7 @@ class MainActivity : ComponentActivity() {
                     SpO2Holder.value = spo2
                     MotionHolder.motionLabel = motionString
                     MotionHolder.motionValue = motionValue
+                    PressureHolder.value = pressureValue   // ✅ NEW
                 }
             }
         }
@@ -223,6 +232,7 @@ fun MLTestScreen() {
     val spo2 = SpO2Holder.value
     val motionLabel = MotionHolder.motionLabel
     val motionValue = MotionHolder.motionValue
+    val pressure = PressureHolder.value   // ✅ NEW
 
     val safeTemp = temp.coerceIn(35.0, 39.0)
     val safeHr = heartRate.coerceIn(50, 120)
@@ -232,7 +242,8 @@ fun MLTestScreen() {
             safeHr.toDouble(),
             safeTemp,
             spo2,
-            motionValue
+            motionValue,
+            pressure   // ✅ NEW
         )
     )
 
@@ -257,84 +268,12 @@ fun MLTestScreen() {
         Text("Motion: $motionLabel")
         Text("Motion Value: $motionValue")
 
+        // ✅ NEW
+        Spacer(modifier = Modifier.height(12.dp))
+        Text("Pressure: ${"%.2f".format(pressure)}")
+
         Spacer(modifier = Modifier.height(12.dp))
 
         Text("Probability = ${result.probability}")
     }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
